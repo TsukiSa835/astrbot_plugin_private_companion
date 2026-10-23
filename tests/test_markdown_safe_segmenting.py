@@ -67,6 +67,41 @@ class _Harness(ProactiveMessageMixin, EventDispatchMixin):
 
 
 class MarkdownSafeSegmentingTests(unittest.TestCase):
+    def test_balanced_budget_preserves_every_sentence_and_punctuation(self) -> None:
+        harness = _Harness()
+        harness.segmented_proactive_max_segments = 3
+        harness.segmented_proactive_min_segment_chars = 8
+        sentences = ["您好。", "今天也请多关照。"] + ["我正在整理书架上的阅读笔记，并逐一核对其中的记录。"] * 8
+        source = "".join(sentences)
+        segments = harness._split_proactive_text(source, event=_Event())
+        self.assertEqual(source, "".join(segments))
+        self.assertEqual(3, len(segments))
+        self.assertLess(max(map(len, segments)), len(source) * 0.5)
+
+    def test_regex_captures_and_unmatched_text_are_lossless(self) -> None:
+        harness = _Harness()
+        harness.segmented_proactive_split_mode = "regex"
+        harness.segmented_proactive_regex = r"([^。]+)。(?:[！？]*)"
+        source = "第一句。！？第二句。没有句号的结尾"
+        self.assertEqual(source, "".join(harness._split_proactive_text(source, event=_Event())))
+
+    def test_code_followed_by_blank_line_explanations_has_separate_bubbles(self) -> None:
+        harness = _Harness()
+        harness.segmented_proactive_split_mode = "regex"
+        harness.segmented_proactive_max_segments = 3
+        code = '```python\nprint("你好。！？")\n```'
+        source = code + "\n\n这是第一段说明\n\n这是第二段说明"
+        self.assertEqual([code, "这是第一段说明", "这是第二段说明"], harness._split_proactive_text(source, event=_Event()))
+
+    def test_punctuation_clusters_do_not_make_punctuation_only_bubbles(self) -> None:
+        harness = _Harness()
+        harness.segmented_proactive_split_mode = "regex"
+        harness.segmented_proactive_regex = r".*?[。！？!?]+|.+\Z"
+        source = "真的吗？！原来如此……我明白了。这就是所谓的情感？！"
+        segments = harness._split_proactive_text(source, event=_Event())
+        self.assertEqual(source, "".join(segments))
+        self.assertFalse(any(item.startswith(("！", "？", "!", "?")) for item in segments))
+
     quote = (
         "> 银月当空，夜色正浓。\n"
         "> 别以为这种小把戏就能难住本小姐。"
@@ -119,14 +154,15 @@ class MarkdownSafeSegmentingTests(unittest.TestCase):
                 self.assertIn(renderer.render(self.quote), renderer.render(quote_segment))
                 self.assertIn(renderer.render(self.quote_list), renderer.render(list_segment))
 
-    def test_budget_merge_uses_one_markdown_paragraph_boundary(self) -> None:
+    def test_budget_never_glues_prose_to_markdown(self) -> None:
         harness = _Harness()
         harness.segmented_proactive_max_segments = 3
 
         segments = harness._split_proactive_text(self.source, event=_Event())
 
-        self.assertEqual(3, len(segments))
-        self.assertIn(f"{self.quote_list}\n\n别得意太早", segments[-1])
+        self.assertEqual(4, len(segments))
+        self.assertEqual("别得意太早，下不为例。", segments[-1])
+        self.assertEqual(self.quote_list, segments[-2])
         self.assertNotIn(f"{self.quote_list}\n\n\n", segments[-1])
 
     def test_fenced_and_unclosed_code_blocks_are_atomic(self) -> None:

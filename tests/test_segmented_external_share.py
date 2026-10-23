@@ -166,10 +166,8 @@ class SegmentedExternalShareTests(unittest.TestCase):
 
         self.assertFalse(DailyStateMixin._proactive_send_disables_segmenting("creative_share"))
         self.assertEqual(5, len(segments))
-        self.assertTrue(segments[0].startswith("嗯...，比折大人"))
-        self.assertEqual("刚才靠在水池边把剩的蓝莓吃掉了，", segments[1])
-        self.assertIn("慢慢收好的时候", segments[3])
-        self.assertIn("心里那个塞得满满的角落", segments[4])
+        self.assertTrue(segments[0].startswith("嗯...比折大人"))
+        self.assertEqual(text.replace("\n", ""), "".join(segments))
         self.assertTrue(segments[-1].endswith("腾出了一小块位置呢。"))
 
     def test_logged_meal_care_text_uses_current_segmentation_config(self) -> None:

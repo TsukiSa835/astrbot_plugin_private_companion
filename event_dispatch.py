@@ -114,6 +114,7 @@ from .conversation_prompt_section import (
     prompt_section,
     render_prompt_sections,
 )
+from .reply_segment_planner import balanced_segments
 from .markdown_segment_guard import (
     MARKDOWN_BLOCK_TOKEN_PATTERN,
     protect_markdown_blocks,
@@ -6221,6 +6222,8 @@ class EventDispatchMixin:
 
         def _clean_segment(segment: str) -> str:
             original = str(segment or "")
+            if not cleanup_enabled:
+                return original.strip()
             cleaned_parts: list[str] = []
             cleanup_scope = str(setting("content_cleanup_scope", "all") or "all")
 
@@ -6383,7 +6386,7 @@ class EventDispatchMixin:
             softened = _collapse_generated_repeated_punctuation(softened)
             return _normalize_cjk_chat_spaces(f"{softened}{right.lstrip()}")
 
-        def _merge_segments(raw: list[str]) -> list[str]:
+        def _legacy_merge_segments(raw: list[str]) -> list[str]:
             segments = [str(item or "").strip() for item in raw if str(item or "").strip()]
             if len(segments) <= 1:
                 return segments
@@ -6434,6 +6437,14 @@ class EventDispatchMixin:
                 for item in merged
             ]
 
+        def _merge_segments(raw: list[str]) -> list[str]:
+            if cleanup_enabled:
+                return _legacy_merge_segments(raw)
+            return balanced_segments(
+                raw, limit=max_segments, minimum=min_segment_chars,
+                length=_visible_len, atomic=_is_atomic_creative_excerpt,
+            )
+
         if split_mode == "words":
             configured_split_words = setting(
                 "split_words",
@@ -6461,14 +6472,27 @@ class EventDispatchMixin:
             return segments if segments and (len(segments) > 1 or cleanup_enabled) else [restore_markdown(normalized)]
 
         try:
-            raw_segments = re.findall(
-                setting("regex", '.*?[。？！~…\\n]+|.+$') or r".*?[。？！~…\n]+|.+$",
-                protected_normalized,
+            pattern = re.compile(
+                setting("regex", r".*?[。？！~…\n]+|.+$") or r".*?[。？！~…\n]+|.+$",
                 re.DOTALL | re.MULTILINE,
             )
         except re.error as e:
             logger.warning("主动分段正则无效,使用默认规则: %s", e)
-            raw_segments = re.findall(r".*?[。？！~…\n]+|.+$", protected_normalized, re.DOTALL | re.MULTILINE)
+            pattern = re.compile(r".*?[。？！~…\n]+|.+$", re.DOTALL | re.MULTILINE)
+        raw_segments = []
+        for paragraph in re.split(r"\n[ \t]*\n+", protected_normalized):
+            cursor = 0
+            for match in pattern.finditer(paragraph):
+                if match.end() <= cursor:
+                    continue
+                end = match.end()
+                # A punctuation cluster and its closing quotes belong together.
+                while end < len(paragraph) and paragraph[end] in '。！？!?…～~”’」』）)]}':
+                    end += 1
+                raw_segments.append(paragraph[cursor:end])
+                cursor = end
+            if cursor < len(paragraph):
+                raw_segments.append(paragraph[cursor:])
 
         segments = []
         for segment in raw_segments:
