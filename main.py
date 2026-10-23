@@ -345,6 +345,10 @@ from .wake_message_context import capture_wake_message_context, restore_wake_mes
 from .tool_history_sanitizer import sanitize_history_image_blocks, sanitize_openai_tool_history
 from .forward_message import ForwardMessageMixin
 from .private_image import PrivateImageMixin
+from .reply_turn_contract import (
+    capture_contract, current_user_text, enforce_response, finalize_request, reply_contract, single_message_text,
+)
+from .reply_semantic_units import explicit_step_units
 from .conversation_injection_plan import (
     DELIVERY_GROUP_MARKER_METADATA_KEY,
     PLACEMENT_DYNAMIC_SYSTEM,
@@ -11692,6 +11696,24 @@ class PrivateCompanionPlugin(
             content=prompt_cdata(self._llm_controlled_segmenting_prompt()),
         )
 
+    @filter.on_llm_request(priority=240000)
+    @_multi_persona_event_context
+    async def capture_reply_turn_contract(self, event, req, *args, **kwargs):
+        if bool(getattr(self, "enabled", False)):
+            capture_contract(event)
+
+    @filter.on_llm_request(priority=-270000)
+    @_multi_persona_event_context
+    async def finalize_reply_turn_contract(self, event, req, *args, **kwargs):
+        if bool(getattr(self, "enabled", False)) and not getattr(event, "private_companion_p4_blocked", False):
+            finalize_request(event, req)
+
+    @filter.on_llm_response(priority=90000)
+    @_multi_persona_event_context
+    async def enforce_reply_turn_contract(self, event, resp, *args, **kwargs):
+        if bool(getattr(self, "enabled", False)) and not getattr(event, "private_companion_p4_blocked", False):
+            await enforce_response(self, event, resp)
+
     @filter.on_llm_request(priority=-253000)
     @_multi_persona_event_context
     async def inject_llm_controlled_segmenting_instruction(
@@ -11749,6 +11771,8 @@ class PrivateCompanionPlugin(
         umo: str = "",
     ) -> list[list[str]]:
         """Plan LLM and plugin boundaries across every text buffer in a chain."""
+        if reply_contract(current_user_text(event)).single_message:
+            return [[single_message_text(str(text), event)] if str(text).strip() else [] for text in texts]
         raw_buffers = [str(text or "").strip() for text in texts]
         if not raw_buffers:
             return []
@@ -11757,6 +11781,10 @@ class PrivateCompanionPlugin(
                 [cleaned] if (cleaned := sanitize_llm_segment_control_tokens(text)) else []
                 for text in raw_buffers
             ]
+        if len(raw_buffers) == 1 and bool(runtime_persona_setting(self, "enable_segmented_plugin_rules", True)):
+            semantic_text = sanitize_llm_segment_control_tokens(raw_buffers[0])
+            if explicit_step_units(semantic_text):
+                return [self._split_proactive_text(semantic_text, event=event, umo=umo)]
         if not bool(runtime_persona_setting(self, "enable_llm_controlled_segmenting", False)):
             return [
                 self._split_proactive_text(cleaned, event=event, umo=umo) if cleaned else []

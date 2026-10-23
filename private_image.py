@@ -4882,6 +4882,12 @@ class PrivateImageMixin:
             )
             return ""
         merged = "\n".join(f"{idx + 1}. {line}" for idx, line in enumerate(lines))
+        if force_consume:
+            setattr(event, "_private_companion_multiuser_turn", True)
+        else:
+            # Preserve same-user followups as the current task, rather than
+            # re-anchoring the request to only the first triggering message.
+            setattr(event, "_private_companion_merged_turn_source", "\n".join(lines))
         logger.info(
             "消息收口等待结束: kind=%s scope=%s sender=%s count=%s result=merged preview=%s",
             buffer_kind,

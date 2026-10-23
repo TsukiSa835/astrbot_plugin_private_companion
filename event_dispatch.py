@@ -115,6 +115,8 @@ from .conversation_prompt_section import (
     render_prompt_sections,
 )
 from .reply_segment_planner import balanced_segments
+from .reply_semantic_units import explicit_step_units
+from .reply_turn_contract import current_user_text, reply_contract, single_message_text
 from .markdown_segment_guard import (
     MARKDOWN_BLOCK_TOKEN_PATTERN,
     protect_markdown_blocks,
@@ -5879,6 +5881,8 @@ class EventDispatchMixin:
         normalized = str(text or "").strip()
         if not normalized:
             return []
+        if reply_contract(current_user_text(event)).single_message:
+            return [single_message_text(str(text or ""), event)]
         tts_normalizer = getattr(self, "_normalize_tts_tags", None)
         if callable(tts_normalizer) and re.search(r"</?(?:pc[_-]?tts|t{2,}s)\b", normalized, flags=re.IGNORECASE):
             try:
@@ -5924,6 +5928,7 @@ class EventDispatchMixin:
                 default=default,
             )
 
+        step_units = explicit_step_units(normalized) if not common_transforms_only else None
         markdown = protect_markdown_blocks(normalized)
         source_length = len(normalized)
         if markdown.active:
@@ -5967,6 +5972,18 @@ class EventDispatchMixin:
         )
         if source_length > threshold and not common_transforms_only:
             return [restore_markdown(normalized)]
+        if step_units:
+            # Semantic boundaries outrank the ordinary bubble budget. Apply
+            # configured transforms within each complete step, never between steps.
+            return [
+                transformed
+                for unit in step_units
+                for transformed in self._split_proactive_text(
+                    unit, event=event, umo=umo, chat_type=chat_type,
+                    force_common_transforms=True, common_transforms_only=True,
+                )
+                if transformed
+            ]
 
         cleanup_pattern: re.Pattern[str] | None = None
         cleanup_words: list[str] = []
