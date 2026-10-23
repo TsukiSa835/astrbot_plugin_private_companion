@@ -140,6 +140,62 @@ def test_message_id_metadata_inside_literal_payload_is_not_removed():
     assert e._private_companion_reply_contract.verbatim == "保留 [MSG_ID:123]"
 
 
+@pytest.mark.parametrize("instruction", [
+    "按原话发给我：‘{text}’", "原文发送：『{text}』",
+    "请照着这段发：“{text}”", "一字不改：'{text}'",
+    "不要做任何修改：“{text}”", "不要改任何内容：“{text}”",
+    "把‘{text}’原话发给我，不要做任何修改", "“{text}”，不要改写",
+    "请直接回复‘{text}’", "保持原文不变：{text}",
+    "原文如下：{text}", "照着发：{text}", "你直接回复‘{text}’",
+])
+def test_common_copy_requests_share_one_literal_contract(instruction):
+    text = "  您好。再见？！  "
+    # Unquoted colon payloads discard delimiter spaces, quoted ones preserve them.
+    raw = instruction.format(text=text)
+    contract = reply_contract(raw)
+    expected = text if any(q in instruction for q in '‘『“\'') else text.lstrip(" \t")
+    assert contract.verbatim == expected
+    assert contract.single_message
+    assert _Harness()._split_proactive_text(expected, event=event(raw)) == [expected]
+
+
+@pytest.mark.parametrize("opening,closing", [("“", "”"), ("‘", "’"), ('"', '"'), ("'", "'"), ("「", "」"), ("『", "』")])
+def test_all_common_quote_pairs_preserve_multiline_payload(opening, closing):
+    text = "第一行。\n\n第二行？！"
+    assert reply_contract(f"原话发送：{opening}{text}{closing}").verbatim == text
+
+
+@pytest.mark.parametrize("source", [
+    "直接告诉我为什么会下雨", "不要修改我的配置，帮我检查一下",
+    "‘原话’这个词是什么意思？", "请比较‘甲’和‘乙’，不要修改它们",
+    "原文发给我", "不要做任何修改", "请原样回复：“没有闭合",
+    "请原话发送：‘甲’和‘乙’", "她说‘原文发送：您好’是什么意思？",
+    "请直接回复‘您好’，然后解释这句话",
+])
+def test_missing_or_ambiguous_payload_is_not_invented(source):
+    assert reply_contract(source).verbatim is None
+
+
+def test_raw_colon_payload_can_contain_program_quotes():
+    assert reply_contract("原文输出：print('您好。')").verbatim == "print('您好。')"
+
+
+@pytest.mark.asyncio
+async def test_explicit_paragraph_delivery_preserves_content_without_sentence_splitting():
+    text = "第一段第一句。第一段第二句。\n\n第二段？！"
+    e = event(f"原文发给我，按段分开发：‘{text}’ [MSG_ID:24680]")
+    e.message_obj = SimpleNamespace(message_id="24680")
+    capture_contract(e)
+    assert e._private_companion_reply_contract.verbatim == text
+    assert not e._private_companion_reply_contract.single_message
+    resp = SimpleNamespace(completion_text="错误改写", result_chain="old")
+    await enforce_response(None, e, resp)
+    assert resp.completion_text == text
+    expected = [["第一段第一句。第一段第二句。", "第二段？！"]]
+    assert PrivateCompanionPlugin._split_llm_controlled_text_buffers_for_event(_Harness(), e, [resp.completion_text]) == expected
+    assert _Harness()._split_proactive_text(resp.completion_text, event=e) == expected[0]
+
+
 def test_single_message_constraint_removes_model_boundaries_without_leaking_tokens():
     harness = _Harness()
     e = event("请用一条消息回复")

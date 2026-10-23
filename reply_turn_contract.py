@@ -17,6 +17,48 @@ from .segmented_message import LLM_SEGMENT_MARKER, sanitize_llm_segment_control_
 
 logger = get_module_logger(__name__)
 
+# One small grammar for common literal-copy requests, not a semantic model call.
+_PRESERVE = (
+    r"(?:原样|逐字|原话|原文|一字不[改动]|一个字也(?:不要|别)改|"
+    r"(?:不要|不必|无需|别)(?:做|进行)?(?:任何)?(?:修改|改动|改写|润色|改)(?:任何(?:内容|文字))?|"
+    r"保持原文不变|照着(?:这段话|这段|原文|原话)?)"
+)
+_PARAGRAPHS = r"(?:按段(?:落)?(?:分开)?(?:发(?:送)?|回复|输出)|分段(?:发送|回复|输出)|分开发送)"
+_COPY_CONTROLS = re.compile(
+    _PRESERVE + "|" + _PARAGRAPHS + r"|"
+    r"(?:不要分段|不要切分|只发一条|单条发送|直接|只需|只要|仅|只|"
+    r"请你|麻烦你|请|麻烦|你|帮我|给我|把|将|按照|按|用|"
+    r"以下(?:内容|文字|文本)?|下面(?:这段)?(?:内容|文字|话)?|如下|"
+    r"这段(?:话|文字|内容)?|这句话|不变|"
+    r"发给我|发出来|回复|复述|输出|发送|回答|发)"
+)
+_QUOTED = re.compile(r'''“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』|"[^"]*"|'[^']*' ''', re.X)
+
+
+def _copy_controls_only(text: str) -> bool:
+    return not re.sub(r"[\s，,。；;：:！!]+", "", _COPY_CONTROLS.sub("", text))
+
+
+def _literal_payload(source: str) -> tuple[str | None, bool]:
+    """Extract only one unambiguous payload and instruction-only surroundings."""
+    quotes = list(_QUOTED.finditer(source))
+    if len(quotes) == 1:
+        match = quotes[0]
+        before, after = source[:match.start()], source[match.end():]
+        controls = before + after
+        intent = re.search(_PRESERVE, controls) or re.search(r"(?:直接|只|仅)(?:回复|回答|输出|发送)", controls)
+        if intent and _copy_controls_only(before) and _copy_controls_only(after):
+            return match.group()[1:-1], bool(re.search(_PARAGRAPHS, controls))
+    # An explicit preservation command followed by a colon also delimits raw
+    # text. A generic "directly answer: why ..." is deliberately excluded.
+    head, separator, body = re.split(r"([：:])", source, maxsplit=1) if re.search(r"[：:]", source) else (source, "", "")
+    if separator and body.strip() and re.search(_PRESERVE, head) and _copy_controls_only(head):
+        body = body.lstrip(" \t")
+        # Unclosed/multiple quotes are ambiguous; do not guess the payload.
+        if not body.startswith(tuple('“‘「『"\'')):
+            return body, bool(re.search(_PARAGRAPHS, head))
+    return None, False
+
 
 @dataclass(frozen=True)
 class ReplyContract:
@@ -59,32 +101,28 @@ def reply_contract(text: str) -> ReplyContract:
     single = bool(directive) or bool(re.search(
         r"(?:[，。；;\n]|^)(?:请)?(?:不要分段|不要切分|只发一条|单条发送)[。！!\s]*$", source
     ))
-    exact = None
-    pairs = {"“": "”", '"': '"', "「": "」", "『": "』"}
-    if directive and re.search(r"原样|逐字", directive.group()):
-        remaining = source[directive.end():].strip()
-        remaining = re.sub(r"^[：:]\s*", "", remaining)
-        if remaining and remaining[0] in pairs and remaining.endswith(pairs[remaining[0]]):
-            exact = remaining[1:-1]
-    # "Directly reply: <quoted payload>" specifies the response itself. Do not
-    # confuse it with a generic request to answer a question directly.
-    literal_directive = re.match(
-        r"^\s*(?:请你|请|麻烦|你)?\s*(?:直接|只|仅)(?:回复|回答|输出|发送)\s*[：:]\s*",
-        source,
-    )
-    if literal_directive:
-        remaining = source[literal_directive.end():].strip()
-        if remaining and remaining[0] in pairs and remaining.endswith(pairs[remaining[0]]):
-            exact = remaining[1:-1]
-            single = True
+    exact, paragraphs = _literal_payload(source)
+    if exact is not None:
+        single = not paragraphs
     python_example = bool(
         re.search(r"(?<![A-Za-z0-9_])python(?![A-Za-z0-9_])", source, re.I)
         and re.search(r"(?:写|编写|给(?:我)?|提供|生成).{0,100}(?:示例|代码|程序)|(?:示例|代码|程序).{0,40}(?:写|编写|生成)", source, re.S)
         and not single
+        and exact is None
         and not re.search(r"(?:不要|无需|不用).{0,8}(?:代码|程序|示例)", source)
         and not (re.search(r"解释|讲解|分析", source) and not re.search(r"写|编写|生成|示例", source))
     )
     return ReplyContract(source, single, exact, python_example)
+
+
+def literal_reply_segments(text: str, event: Any) -> list[str] | None:
+    contract = reply_contract(current_user_text(event))
+    if contract.verbatim is None or text != contract.verbatim:
+        return None
+    if contract.single_message:
+        return [text]
+    # Explicit permission to split by existing blank lines, never sentences.
+    return [part for part in re.split(r"\r?\n[ \t]*\r?\n+", text) if part]
 
 
 def has_python_code(text: str) -> bool:

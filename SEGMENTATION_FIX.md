@@ -64,3 +64,15 @@ bubble. Markdown protection is applied first so internal code/list/table blank
 lines do not become accidental split points. Regression coverage includes the
 runtime metadata suffix, direct-answer false positives, CRLF paragraphs and a
 final numbered step containing code followed by a closing question.
+
+## Small unified literal-copy parser
+
+Common original-wording/no-edit/copy-as-is phrases now share one parser. It
+accepts six common quote pairs (including single quotes), commands before or
+after a single payload, and unquoted colon-delimited text after an explicit
+preservation command. Only instruction-only surroundings are accepted; generic
+questions, multiple ambiguous quotations, missing text and requests for extra
+explanations do not become forced literal replies. No additional model call is
+introduced. Default delivery is one message; explicitly requested paragraph
+delivery splits only at existing blank lines and bypasses sentence balancing,
+cleanup and replacement. No configuration or persona changes are required.

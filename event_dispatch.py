@@ -116,7 +116,7 @@ from .conversation_prompt_section import (
 )
 from .reply_segment_planner import balanced_segments
 from .reply_semantic_units import explicit_step_units
-from .reply_turn_contract import current_user_text, reply_contract, single_message_text
+from .reply_turn_contract import current_user_text, literal_reply_segments, reply_contract, single_message_text
 from .markdown_segment_guard import (
     MARKDOWN_BLOCK_TOKEN_PATTERN,
     protect_markdown_blocks,
@@ -5881,6 +5881,9 @@ class EventDispatchMixin:
         normalized = str(text or "").strip()
         if not normalized:
             return []
+        literal = literal_reply_segments(str(text or ""), event)
+        if literal is not None:
+            return literal
         if reply_contract(current_user_text(event)).single_message:
             return [single_message_text(str(text or ""), event)]
         tts_normalizer = getattr(self, "_normalize_tts_tags", None)

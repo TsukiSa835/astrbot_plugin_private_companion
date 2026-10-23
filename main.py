@@ -346,7 +346,7 @@ from .tool_history_sanitizer import sanitize_history_image_blocks, sanitize_open
 from .forward_message import ForwardMessageMixin
 from .private_image import PrivateImageMixin
 from .reply_turn_contract import (
-    capture_contract, current_user_text, enforce_response, finalize_request, reply_contract, single_message_text,
+    capture_contract, current_user_text, enforce_response, finalize_request, literal_reply_segments, reply_contract, single_message_text,
 )
 from .reply_semantic_units import explicit_step_units
 from .conversation_injection_plan import (
@@ -11771,6 +11771,10 @@ class PrivateCompanionPlugin(
         umo: str = "",
     ) -> list[list[str]]:
         """Plan LLM and plugin boundaries across every text buffer in a chain."""
+        if len(texts) == 1:
+            literal = literal_reply_segments(str(texts[0]), event)
+            if literal is not None:
+                return [literal]
         if reply_contract(current_user_text(event)).single_message:
             return [[single_message_text(str(text), event)] if str(text).strip() else [] for text in texts]
         raw_buffers = [str(text or "").strip() for text in texts]
