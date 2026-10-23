@@ -27,6 +27,25 @@ def test_five_prose_steps_remain_five_whole_bubbles(joiner):
     assert harness._split_proactive_text(source) == steps
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_last_step_and_independent_closing_paragraph_are_separate(newline):
+    harness = _Harness()
+    harness.segmented_proactive_max_segments = 3
+    steps = [f"第{n}步：先完成这一步。然后核对它的结果。" for n in "一二三四五"]
+    intro, closing = "下面是五个步骤：", "您更想先尝试哪一种方法呢？"
+    source = (newline * 2).join([intro, *steps, closing])
+    assert harness._split_proactive_text(source) == [intro, *steps, closing]
+
+
+def test_last_numbered_step_keeps_code_blank_lines_and_separates_closing():
+    code = '   ```python\n   # 注释\n\n   print("您好。")\n   ```'
+    source = f"1. 准备环境。\n\n2. 执行下面的代码。\n\n{code}\n\n您需要其他示例吗？"
+    units = explicit_step_units(source)
+    assert len(units) == 3
+    assert code in units[1]
+    assert units[-1] == "您需要其他示例吗？"
+
+
 def test_step_boundaries_outrank_model_boundaries_inside_a_step():
     harness = _Harness()
     source = f"第一，整理书籍。\n{LLM_SEGMENT_MARKER}\n核对分类。第二，安放书籍。核对位置。"
@@ -62,6 +81,63 @@ def test_verbatim_bypasses_cleanup_replacement_and_model_marker_splitting():
     assert harness._split_proactive_text(source, event=request) == [source]
     assert PrivateCompanionPlugin._split_llm_controlled_text_buffers_for_event(harness, request, [source]) == [[source]]
     assert not reply_contract("她说“请原样回复”是什么意思？").single_message
+
+
+@pytest.mark.parametrize("prefix", ["请直接回复：", "直接回复：", "请只回复：", "请直接回答："])
+def test_direct_quoted_reply_is_literal_and_single_message(prefix):
+    payload = "真的吗？！原来如此......我明白了。这就是所谓的「情感」？！"
+    e = event(prefix + "“" + payload + "”")
+    contract = reply_contract(e.message_str)
+    assert contract.single_message
+    assert contract.verbatim == payload
+    assert _Harness()._split_proactive_text(payload, event=e) == [payload]
+    assert PrivateCompanionPlugin._split_llm_controlled_text_buffers_for_event(_Harness(), e, [payload]) == [[payload]]
+
+
+@pytest.mark.parametrize("text", ["请直接回答这个问题：为什么天空是蓝色？", "她说“请直接回复：你好”是什么意思？", "请直接回复：“您好。”然后解释为什么。"])
+def test_direct_answer_and_quoted_mentions_do_not_force_literal_output(text):
+    assert not reply_contract(text).single_message
+
+
+@pytest.mark.asyncio
+async def test_direct_quoted_reply_is_restored_before_delivery():
+    e = event('请直接回复：“您好。再见。”')
+    capture_contract(e)
+    resp = SimpleNamespace(completion_text="您好。", result_chain="old")
+    await enforce_response(None, e, resp)
+    assert resp.completion_text == "您好。再见。"
+    assert resp.result_chain is None
+
+
+@pytest.mark.asyncio
+async def test_direct_reply_with_real_qq_tools_suffix_uses_user_text_only():
+    payload = "真的吗？！原来如此......我明白了。这就是所谓的「情感」？！"
+    original = "请直接回复：“" + payload + "”"
+    e = event(original + " [MSG_ID:24680]")
+    e.message_obj = SimpleNamespace(message_id="24680")
+    capture_contract(e)
+    assert e._private_companion_reply_contract.source == original
+    assert e._private_companion_reply_contract.verbatim == payload
+    assert e.message_str.endswith(" [MSG_ID:24680]")
+    resp = SimpleNamespace(completion_text="错误改写。", result_chain="old")
+    await enforce_response(None, e, resp)
+    assert resp.completion_text == payload
+    assert PrivateCompanionPlugin._split_llm_controlled_text_buffers_for_event(_Harness(), e, [resp.completion_text]) == [[payload]]
+
+
+def test_literal_ids_and_other_message_ids_are_preserved():
+    e = event('请直接回复：“保留 [MSG_ID:123]。” [MSG_ID:999]')
+    e.message_obj = SimpleNamespace(message_id="123")
+    capture_contract(e)
+    assert e._private_companion_reply_contract.source == e.message_str
+    assert e._private_companion_reply_contract.verbatim is None
+
+
+def test_message_id_metadata_inside_literal_payload_is_not_removed():
+    e = event('请直接回复：“保留 [MSG_ID:123]” [MSG_ID:123]')
+    e.message_obj = SimpleNamespace(message_id="123")
+    capture_contract(e)
+    assert e._private_companion_reply_contract.verbatim == "保留 [MSG_ID:123]"
 
 
 def test_single_message_constraint_removes_model_boundaries_without_leaking_tokens():

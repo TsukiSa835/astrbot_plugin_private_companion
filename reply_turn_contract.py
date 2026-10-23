@@ -33,7 +33,18 @@ def current_user_text(event: Any) -> str:
     if isinstance(captured, ReplyContract):
         return captured.source
     # message_str belongs to this event, unlike recalled text in req.prompt.
-    return str(getattr(event, "message_str", "") or "")
+    text = str(getattr(event, "message_str", "") or "")
+    message = getattr(event, "message_obj", None)
+    message_id = getattr(message, "message_id", None)
+    raw = getattr(message, "raw_message", None)
+    if message_id is None and isinstance(raw, dict):
+        message_id = raw.get("message_id")
+    if message_id is not None and str(message_id):
+        # QQ tools append this suffix to event.message_str before LLM hooks.
+        # Match only this event's real ID; preserve quoted/literal IDs and leave
+        # the event/provider tool metadata itself unchanged.
+        text = re.sub(r"[ \t]+\[MSG_ID:" + re.escape(str(message_id)) + r"\][ \t]*$", "", text)
+    return text
 
 
 def reply_contract(text: str) -> ReplyContract:
@@ -49,12 +60,23 @@ def reply_contract(text: str) -> ReplyContract:
         r"(?:[，。；;\n]|^)(?:请)?(?:不要分段|不要切分|只发一条|单条发送)[。！!\s]*$", source
     ))
     exact = None
+    pairs = {"“": "”", '"': '"', "「": "」", "『": "』"}
     if directive and re.search(r"原样|逐字", directive.group()):
         remaining = source[directive.end():].strip()
         remaining = re.sub(r"^[：:]\s*", "", remaining)
-        pairs = {"“": "”", '"': '"', "「": "」", "『": "』"}
         if remaining and remaining[0] in pairs and remaining.endswith(pairs[remaining[0]]):
             exact = remaining[1:-1]
+    # "Directly reply: <quoted payload>" specifies the response itself. Do not
+    # confuse it with a generic request to answer a question directly.
+    literal_directive = re.match(
+        r"^\s*(?:请你|请|麻烦|你)?\s*(?:直接|只|仅)(?:回复|回答|输出|发送)\s*[：:]\s*",
+        source,
+    )
+    if literal_directive:
+        remaining = source[literal_directive.end():].strip()
+        if remaining and remaining[0] in pairs and remaining.endswith(pairs[remaining[0]]):
+            exact = remaining[1:-1]
+            single = True
     python_example = bool(
         re.search(r"(?<![A-Za-z0-9_])python(?![A-Za-z0-9_])", source, re.I)
         and re.search(r"(?:写|编写|给(?:我)?|提供|生成).{0,100}(?:示例|代码|程序)|(?:示例|代码|程序).{0,40}(?:写|编写|生成)", source, re.S)

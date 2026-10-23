@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import re
 
+from .markdown_segment_guard import protect_markdown_blocks
+
 
 _CN = {value: index for index, value in enumerate(
     ("一", "二", "三", "四", "五", "六", "七", "八", "九", "十"), 1
@@ -58,4 +60,10 @@ def explicit_step_units(text: str) -> list[str] | None:
     starts = [m.start() for m in matches]
     units = [text[:starts[0]].strip()] if text[:starts[0]].strip() else []
     units.extend(text[start:end].strip() for start, end in zip(starts, starts[1:] + [len(text)]))
+    # The final step ends at an independent paragraph, rather than owning the
+    # entire remainder of the reply. Protect nested Markdown first so blank
+    # lines inside code, tables or a list continuation remain untouched.
+    last = protect_markdown_blocks(units[-1])
+    tail_parts = re.split(r"\r?\n[ \t]*\r?\n+", last.protected_text)
+    units[-1:] = [last.restore(part).strip() for part in tail_parts if part.strip()]
     return [unit for unit in units if unit]

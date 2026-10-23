@@ -51,3 +51,16 @@ The observed wrong-topic response existed before segmentation. Its unique
 original cause cannot be established from the supplied logs; the task reminder,
 artifact check and bounded recovery are defensive fixes, not proof of that cause.
 Persona/style prompts, settings and memory scopes are unchanged.
+
+## Third acceptance round
+
+Quoted payloads following an explicit `directly reply:`/`only reply:` directive
+also use the literal single-message contract. A real QQ-tools `[MSG_ID:...]`
+suffix is ignored only for constraint detection and only when it matches this
+event's actual message ID; the event/tool metadata and literal IDs stay intact.
+
+An independent blank-line paragraph following the last step now gets its own
+bubble. Markdown protection is applied first so internal code/list/table blank
+lines do not become accidental split points. Regression coverage includes the
+runtime metadata suffix, direct-answer false positives, CRLF paragraphs and a
+final numbered step containing code followed by a closing question.
