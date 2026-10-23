@@ -46,7 +46,7 @@ def _literal_payload(source: str) -> tuple[str | None, bool]:
         match = quotes[0]
         before, after = source[:match.start()], source[match.end():]
         controls = before + after
-        intent = re.search(_PRESERVE, controls) or re.search(r"(?:直接|只|仅)(?:回复|回答|输出|发送)", controls)
+        intent = re.search(_PRESERVE, controls) or re.search(r"(?:直接|只|仅)(?:回复|回答|输出|发送|发)", controls)
         if intent and _copy_controls_only(before) and _copy_controls_only(after):
             return match.group()[1:-1], bool(re.search(_PARAGRAPHS, controls))
     # An explicit preservation command followed by a colon also delimits raw
@@ -214,8 +214,10 @@ async def enforce_response(owner: Any, event: Any, resp: Any) -> None:
     if getattr(event, "private_companion_debounce_pending_merged", False):
         return
     if contract.verbatim is not None:
-        resp.completion_text = contract.verbatim
         resp.result_chain = None
+        # AstrBot's completion_text setter writes into an existing result_chain.
+        # Clear the old chain BEFORE assigning, otherwise the new text vanishes.
+        resp.completion_text = contract.verbatim
         return
     snapshot = getattr(event, "_private_companion_code_request", None)
     if not contract.python_example or not text.strip() or has_python_code(text) or not isinstance(snapshot, dict):
@@ -258,12 +260,12 @@ async def enforce_response(owner: Any, event: Any, resp: Any) -> None:
             except Exception:
                 pass  # Accounting must not discard a valid repaired response.
         if has_python_code(candidate) and not getattr(repaired, "tools_call_name", None):
-            resp.completion_text = candidate
             resp.result_chain = None
+            resp.completion_text = candidate
             logger.info("[本轮任务] python_repair_ok trace=%s", snapshot["trace"])
             return
     except Exception as exc:
         logger.warning("[本轮任务] python_repair_failed trace=%s error_type=%s", snapshot["trace"], type(exc).__name__)
     # Never deliver the known wrong-topic response as though the task succeeded.
-    resp.completion_text = "这次没能正确生成您要的 Python 示例，请再试一次。"
     resp.result_chain = None
+    resp.completion_text = "这次没能正确生成您要的 Python 示例，请再试一次。"

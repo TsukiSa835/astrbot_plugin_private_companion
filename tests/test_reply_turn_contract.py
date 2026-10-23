@@ -1,9 +1,13 @@
 from types import SimpleNamespace
+import inspect
 from unittest.mock import AsyncMock
 
 import pytest
 
 from astrbot.core.agent.message import TextPart
+from astrbot.api.message_components import Plain
+from astrbot.core.message.message_event_result import MessageChain
+from astrbot.core.provider.entities import LLMResponse
 from astrbot_plugin_private_companion.main import PrivateCompanionPlugin
 from astrbot_plugin_private_companion.reply_semantic_units import explicit_step_units
 from astrbot_plugin_private_companion.reply_turn_contract import (
@@ -15,6 +19,52 @@ from test_markdown_safe_segmenting import _Harness
 
 def event(text):
     return SimpleNamespace(message_str=text, unified_msg_origin="test:FriendMessage:user")
+
+
+def real_response(text):
+    return LLMResponse(role="assistant", result_chain=MessageChain(chain=[Plain(text)]))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("instruction", [
+    '请原话回复“真的吗？！我明白了。”',
+    '请你直接发“你应该强硬点”这句话',
+    '请你直接发送“真的吗？！我明白了。”',
+])
+async def test_real_astrbot_response_chain_keeps_restored_literal_text(instruction):
+    e = event(instruction)
+    capture_contract(e)
+    assert e._private_companion_reply_contract.verbatim is not None
+    response = real_response("模型生成的多余解释。")
+    await enforce_response(None, e, response)
+    assert response.completion_text == e._private_companion_reply_contract.verbatim
+    assert response.completion_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("success", [True, False])
+async def test_real_response_chain_keeps_python_repair_or_failure_message(success):
+    e = event("写一段Python示例")
+    finalize_request(e, request())
+    code = "```python\nprint('ok')\n```"
+    generate = AsyncMock(return_value=real_response(code)) if success else AsyncMock(side_effect=RuntimeError("offline"))
+    owner = SimpleNamespace(context=SimpleNamespace(get_current_chat_provider_id=AsyncMock(return_value="selected"), llm_generate=generate))
+    response = real_response("第一，整理书架。")
+    await enforce_response(owner, e, response)
+    assert response.completion_text == code if success else "没能正确生成" in response.completion_text
+
+
+@pytest.mark.asyncio
+async def test_restored_literal_is_not_silenced_rewritten_or_executed_as_timer():
+    # Use a simple unquoted payload so nested ASCII quotes are part of the text.
+    e = event('原文输出：您好。<timer value="1"/>')
+    e.is_private_chat = lambda: True
+    capture_contract(e)
+    response = real_response("多余解释")
+    await enforce_response(None, e, response)
+    owner = SimpleNamespace(enabled=True, _proactive_only_blocks_passive_event=lambda *args: False)
+    await inspect.unwrap(PrivateCompanionPlugin.capture_llm_timer_directive)(owner, e, response)
+    assert response.completion_text == '您好。<timer value="1"/>'
 
 
 @pytest.mark.parametrize("joiner", ["", " ", "\n\n"])

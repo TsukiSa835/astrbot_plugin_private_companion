@@ -76,3 +76,19 @@ explanations do not become forced literal replies. No additional model call is
 introduced. Default delivery is one message; explicitly requested paragraph
 delivery splits only at existing blank lines and bypasses sentence balancing,
 cleanup and replacement. No configuration or persona changes are required.
+
+## Native response-chain compatibility
+
+AstrBot's real `LLMResponse.completion_text` setter writes into an existing
+`result_chain`. Literal restoration and code repair must clear the old chain
+before assigning the replacement text; the previous order discarded the new
+text and produced an empty response. Regression tests now use native AstrBot
+response objects rather than only plain mock objects. Explicit restored copies
+also bypass companion rewrite/silence/deduplication/timer interpretation.
+Literal requests using `directly send` and a quoted `this sentence` payload are
+accepted by the same parser.
+
+Protected quotation/block barriers may exceed the ordinary bubble budget when
+a prose run would otherwise be substantially oversized. Whole sentences and
+the protected excerpt remain intact; no change is made to model wording or
+language style.

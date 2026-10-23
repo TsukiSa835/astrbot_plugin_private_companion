@@ -19850,6 +19850,12 @@ class PrivateCompanionPlugin(
                 )
                 release_now = True
                 return
+            contract = getattr(event, "_private_companion_reply_contract", None)
+            literal = getattr(contract, "verbatim", None)
+            if literal is not None and original_text == str(literal).strip():
+                # An explicit copy is user-authored text, not a new companion
+                # response to rewrite, silence, deduplicate or parse as timers.
+                return
             try:
                 user_id = str(event.get_sender_id())
             except Exception:

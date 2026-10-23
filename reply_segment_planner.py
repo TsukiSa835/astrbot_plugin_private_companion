@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import math
 from collections.abc import Callable
 
 from .markdown_segment_guard import MARKDOWN_BLOCK_TOKEN_PATTERN
@@ -88,14 +89,23 @@ def balanced_segments(
         runs.append(pending)
     prose_runs = [run for run in runs if isinstance(run, list)]
     remaining = max(limit - sum(isinstance(run, str) for run in runs), len(prose_runs))
+    target = max(minimum, sum(length(piece) for piece in pieces) / max(1, limit))
+
+    def minimum_budget(run: list[str]) -> int:
+        size = sum(length(piece) for piece in run)
+        return min(len(run), math.ceil(size / target)) if size > target * 1.5 else 1
+
+    # Protected quotations/blocks are barriers, not a reason to force a long
+    # prose run into one bubble. Permit a small soft-limit overflow when needed.
+    remaining = max(remaining, sum(minimum_budget(run) for run in prose_runs))
     result = []
     for run in runs:
         if isinstance(run, str):
             result.append(run)
             continue
-        others = len(prose_runs) - 1
+        others = sum(minimum_budget(other) for other in prose_runs[1:])
         budget = max(1, round(remaining * sum(length(x) for x in run) / max(1, sum(length(x) for r in prose_runs for x in r))))
-        budget = min(budget, remaining - others)
+        budget = min(max(budget, minimum_budget(run)), remaining - others)
         grouped = group(run, budget)
         result.extend(grouped)
         remaining -= len(grouped)

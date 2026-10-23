@@ -67,6 +67,20 @@ class _Harness(ProactiveMessageMixin, EventDispatchMixin):
 
 
 class MarkdownSafeSegmentingTests(unittest.TestCase):
+    def test_long_prose_before_protected_quote_gets_more_than_one_bubble(self) -> None:
+        harness = _Harness()
+        harness.segmented_proactive_max_segments = 3
+        harness.segmented_proactive_min_segment_chars = 8
+        preface = "遇到这样的事情，感到不舒服是可以理解的。" + "您可以自己判断是否接受请求，不必勉强自己承担他人的冲突。" * 5
+        quote = "「我觉得这句话不太合适，还是由您亲口说明吧」"
+        tail = "也可以先表达自己的想法，再决定如何处理。真正尊重您的人会愿意听取您的意见。"
+        text = preface + "您可以这样说——" + quote + tail
+        segments = harness._split_proactive_text(text)
+        self.assertGreater(len(segments), 3)
+        self.assertEqual(text, "".join(segments))
+        self.assertLess(len(segments[0]), len(preface) * 0.8)
+        self.assertEqual(1, sum(quote in part for part in segments))
+
     def test_balanced_budget_preserves_every_sentence_and_punctuation(self) -> None:
         harness = _Harness()
         harness.segmented_proactive_max_segments = 3
